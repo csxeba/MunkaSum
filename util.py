@@ -7,7 +7,7 @@ exceptions = {"Bogdánné Major Andrea": [-30] * 5,
               "Gherghely Ildikó": [0, 0, 0, 90, 0]}
 
 INFLTYPE = "xlsx"
-OUTFLTYPE = "csv"
+OUTFLTYPE = "xlsx"
 GUI = True
 
 
@@ -39,10 +39,13 @@ def parse_xl(path: str):
     if not sheets:
         raise RuntimeError("No valid sheets in file!")
 
-    lines = [[cell.value for cell in row] for row in sheets[0].rows]
+    rows = []
+    for sheet in sheets:
+        rows += list(sheet.rows)
+    lines = [[cell.value for cell in row] for row in rows]
     lines = [row for row in lines if any(row)]
     header = fix_header(lines[0])
-    matrix = extract_matrix(lines[1:-1])
+    matrix = extract_matrix(lines)
 
     return matrix, header
 
@@ -58,6 +61,11 @@ def fix_header(raw_header):
 def extract_matrix(lines):
     matrix = []
     for line in lines:
+        if (line[0] == "Név") or \
+                ("összesen" in line[0].lower()) or \
+                not line[0]:
+            print("Skipping invalid line")
+            continue
         name, date, arrive, depart = line[0], todate(line[1]), totime(line[3]), totime(line[5])
         if arrive == "n.a.":
             arrive = totime(line[2])
@@ -71,6 +79,19 @@ def extract_matrix(lines):
         matrix.append([name, date, arrive, arr_err, depart, dep_err])
 
     return matrix
+
+
+def summarize(matrix):
+    names = sorted(list(set([line[0] for line in matrix])))
+    dictionary = {name: [0, 0, 0, 0] for name in names}
+    for line in matrix:
+        if line[3].epochs > 0 and line[3] != "n.a.":
+            dictionary[line[0]][0] += line[3].epochs
+            dictionary[line[0]][1] += 1
+        if line[5].epochs > 0 and line[5] != "n.a.":
+            dictionary[line[0]][2] += line[5].epochs
+            dictionary[line[0]][3] += 1
+    return dictionary, names
 
 
 def todate(x):
@@ -130,35 +151,59 @@ def tk_get_path():
 def dump_to_csv(matrix, headers, outroot):
     outchain = "\t".join(headers) + "\n"
     for line in matrix:
-        outchain += "\t".join([str(e) for e in line]) + "\n"
+        outchain += "\t".join([str(e) for e in line[:3]]) + "\t"
+        outchain += str(line[3].epochs) + "\t"
+        outchain += str(line[4]) + "\t" + str(line[5].epochs) + "\n"
     with open(outroot + "jelolt.csv", "w") as outfl:
         outfl.write(outchain)
         outfl.close()
-    # print("-"*70)
+    # print("-" * 70)
     # print(outchain)
 
-    names = sorted(list(set([line[0] for line in matrix])))
-    dictionary = {name: [0, 0, 0, 0] for name in names}
-    for line in matrix:
-        if line[3].epochs > 0 and line[3] != "n.a.":
-            dictionary[line[0]][0] += line[3].epochs
-            dictionary[line[0]][1] += 1
-        if line[5].epochs > 0 and line[5] != "n.a.":
-            dictionary[line[0]][2] += line[5].epochs
-            dictionary[line[0]][3] += 1
+    dictionary, names = summarize(matrix)
+
     outchain = "Név\tKésés\tDarab\tKorai_indulás\tDarab\n"
     for name in names:
         outchain += name + "\t" + "\t".join([str(element) for element in dictionary[name]]) + "\n"
     with open(outroot + "osszesites.csv", "w") as outfl:
         outfl.write(outchain)
         outfl.close()
-    # print("-"*70)
+    # print("-" * 70)
     # print(outchain)
 
 
 def dump_to_xl(matrix, headers, outpath):
     from openpyxl import Workbook
-    from openpyxl.worksheet import Worksheet
+
+    wb = Workbook()
+    wb.create_sheet("Jelzett")
+    wb.create_sheet("Összesített")
+    wb.remove("Sheet")
+
+    ws = wb.get_sheet_by_name("Jelzett")
+    ws.append(headers)
+
+    for i, row in enumerate(range(2, len(matrix))):
+        arep = matrix[i][3].epochs
+        drep = matrix[i][5].epochs
+        ws["A" + str(row)].value = matrix[i][0]  # Name
+        ws["B" + str(row)].value = str(matrix[i][1])  # Date
+        ws["C" + str(row)].value = str(matrix[i][2])  # Arrive
+        ws["D" + str(row)].value = arep if arep > 0 else 0
+        ws["E" + str(row)].value = str(matrix[i][4])  # Depart
+        ws["F" + str(row)].value = drep if drep > 0 else 0
+
+    dictionary, names = summarize(matrix)
+
+    summary = []
+    for name, (lates, nlates, earlies, nealries) in dictionary.items():
+        summary.append((name, lates, nlates, earlies, nealries))
+
+    ws = wb.get_sheet_by_name("Összesített")
+    ws.append("Név,Késés,Darab,Korai_indulás,Darab".split(","))
+    for row in summary:
+        ws.append(row)
+    wb.save(outpath)
 
 
 def main():
@@ -172,7 +217,8 @@ def main():
     if OUTFLTYPE == "csv":
         dump_to_csv(matrix, header, outroot="E:/tmp/")
     else:
-        raise NotImplementedError()
+        dump_to_xl(matrix, header, outpath="E:/tmp/output.xlsx")
+
 
 if __name__ == '__main__':
     main()
