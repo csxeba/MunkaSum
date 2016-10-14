@@ -1,4 +1,6 @@
-from src.logic import *
+import os
+
+from MunkaSum.src.logic import *
 
 
 def tk_get_path():
@@ -13,11 +15,10 @@ def tk_get_path():
     return inpath
 
 
-OUTFLTYPE = "xlsx"
+OUTPATH = "E:/tmp/output.xlsx"
 path = tk_get_path()
 matrix, header = parse_xl(path)
 
-if OUTFLTYPE == "csv":
-    dump_to_csv(matrix, header, outroot="E:/tmp/")
-else:
-    dump_to_xl(matrix, header, outpath="E:/tmp/output.xlsx")
+dump_to_xl(matrix, header, outpath=OUTPATH)
+print("Dumped output file to", OUTPATH)
+os.startfile(OUTPATH)
