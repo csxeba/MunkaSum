@@ -1,14 +1,15 @@
 import datetime
+import warnings
 
-from MunkaSum.time import Time
+import openpyxl as xl
+from .time import Time
 
-exceptions = {"Bogdánné Major Andrea": [-30] * 5,
-              "Simon Ildikó": [-30] * 5,
+exceptions = {"Bogdánné Major Andrea": [-30, -30, -30, -30, -30],
+              "Simon Ildikó": [-30, -30, -30, -30, -30],
               "Gherghely Ildikó": [0, 0, 0, 90, 0]}
 
-INFLTYPE = "xlsx"
-OUTFLTYPE = "xlsx"
-GUI = True
+ideal_header = ["Név", "Dátum", "Érkezés", "", "Távozás", "",
+                "Napi rögzítési eltérés", "Rögzítette (TASZ, dátum)"]
 
 
 def parse_csv(path: str):
@@ -33,9 +34,8 @@ def parse_csv(path: str):
 
 
 def parse_xl(path: str):
-    import openpyxl as xl
     wb = xl.load_workbook(path, data_only=True)
-    sheets = [sheet for sheet in wb if sheet.dimensions != "A1:A1"]
+    sheets = [sheet for sheet in wb if validate(sheet)]
     if not sheets:
         raise RuntimeError("No valid sheets in file!")
 
@@ -50,8 +50,24 @@ def parse_xl(path: str):
     return matrix, header
 
 
+def validate(sheet):
+    if sheet.dimensions == "A1:A1":
+        warnings.warn("Empty sheet found!", RuntimeWarning)
+        return False
+    if sheet.dimensions[:4] != "A1:H":
+        warnings.warn("Invalid data!", RuntimeWarning)
+        return False
+    header = [cells[0].value for cells in sheet["A1:H1"]]
+    if not all([left == right for left, right in zip(header, ideal_header)]):
+        warnings.warn("Possibly missing header!", RuntimeWarning)
+    return True
+
+
 def fix_header(raw_header):
     assert len(raw_header) == 8 and raw_header[0] == "Név"
+    if not all([left == right for left, right in zip(raw_header, ideal_header)]):
+        raw_header = ideal_header
+
     header = raw_header[:6]
     header[3] = "érk_hiba"
     header[5] = "táv_hiba"
@@ -128,97 +144,85 @@ def assert_line(line):
     result = [arrive - (Time(hours=7, minutes=30) + patience)]
 
     if date.weekday() == 4:
-        referece = Time(hours=13, minutes=30) + patience
+        referece = Time(hours=13, minutes=30) - patience
     else:
-        referece = Time(hours=16, minutes=0) + patience
+        referece = Time(hours=16, minutes=0) - patience
 
     result.append(referece - depart)
     return result
 
 
-def tk_get_path():
-    from tkinter import Tk
-    from tkinter.filedialog import askopenfilename
-
-    tk = Tk()
-    tk.withdraw()
-    inpath = askopenfilename()
-    tk.destroy()
-
-    return inpath
-
-
 def dump_to_csv(matrix, headers, outroot):
-    outchain = "\t".join(headers) + "\n"
-    for line in matrix:
-        outchain += "\t".join([str(e) for e in line[:3]]) + "\t"
-        outchain += str(line[3].epochs) + "\t"
-        outchain += str(line[4]) + "\t" + str(line[5].epochs) + "\n"
-    with open(outroot + "jelolt.csv", "w") as outfl:
-        outfl.write(outchain)
-        outfl.close()
-    # print("-" * 70)
-    # print(outchain)
 
-    dictionary, names = summarize(matrix)
+    def build_big_data_string():
+        outchain = "\t".join(headers) + "\n"
+        for line in matrix:
+            arr_err = line[3].epochs
+            dep_err = line[5].epochs
+            outchain += "\t".join([str(e) for e in line[:3]]) + "\t"
+            outchain += str(arr_err if arr_err > 0 else "") + "\t"
+            outchain += str(line[4]) + "\t" + str(dep_err if dep_err > 0 else "") + "\n"
 
-    outchain = "Név\tKésés\tDarab\tKorai_indulás\tDarab\n"
-    for name in names:
-        outchain += name + "\t" + "\t".join([str(element) for element in dictionary[name]]) + "\n"
-    with open(outroot + "osszesites.csv", "w") as outfl:
-        outfl.write(outchain)
-        outfl.close()
-    # print("-" * 70)
-    # print(outchain)
+        return outchain, "jelolt.csv"
+
+    def build_summary_data_string():
+        dictionary, names = summarize(matrix)
+
+        outchain = "Név\tKésés\tDarab\tKorai_indulás\tDarab\n"
+        for name in names:
+            outchain += name + "\t" + "\t".join([str(element) for element in dictionary[name]]) + "\n"
+        return outchain, "osszesitett.csv"
+
+    def dump_chain(chain, flname):
+        with open(outroot + flname, "w") as outfl:
+            outfl.write(chain)
+            outfl.close()
+
+    dump_chain(*build_big_data_string())
+    dump_chain(*build_summary_data_string())
 
 
 def dump_to_xl(matrix, headers, outpath):
     from openpyxl import Workbook
 
+    def build_big_worksheet():
+        ws = wb.get_sheet_by_name("Jelzett")
+        ws.append(headers)
+
+        for i, row in enumerate(range(2, len(matrix))):
+            arep = matrix[i][3].epochs
+            drep = matrix[i][5].epochs
+            ws["A" + str(row)].value = matrix[i][0]  # Name
+            ws["B" + str(row)].value = str(matrix[i][1])  # Date
+            ws["C" + str(row)].value = str(matrix[i][2])  # Arrive
+            ws["D" + str(row)].value = arep if arep > 0 else ""
+            ws["E" + str(row)].value = str(matrix[i][4])  # Depart
+            ws["F" + str(row)].value = drep if drep > 0 else ""
+
+    def build_summary_worksheet():
+        dictionary, names = summarize(matrix)
+
+        summary = []
+        for name, (lates, nlates, earlies, nealries) in dictionary.items():
+            summary.append((name, lates, nlates, earlies, nealries))
+
+        ws = wb.get_sheet_by_name("Összesített")
+        ws.append("Név,Késés,Darab,Korai_indulás,Darab".split(","))
+        for row in summary:
+            ws.append(row)
+
+    def remove_orphan_sheet():
+        sheets = list(wb.get_sheet_names())
+        if "Sheet" in sheets:
+            wb.remove(wb.get_sheet_by_name("Sheet"))
+            sheets.remove("Sheet")
+
     wb = Workbook()
     wb.create_sheet("Jelzett")
     wb.create_sheet("Összesített")
-    wb.remove("Sheet")
 
-    ws = wb.get_sheet_by_name("Jelzett")
-    ws.append(headers)
+    build_big_worksheet()
+    build_summary_worksheet()
+    remove_orphan_sheet()
 
-    for i, row in enumerate(range(2, len(matrix))):
-        arep = matrix[i][3].epochs
-        drep = matrix[i][5].epochs
-        ws["A" + str(row)].value = matrix[i][0]  # Name
-        ws["B" + str(row)].value = str(matrix[i][1])  # Date
-        ws["C" + str(row)].value = str(matrix[i][2])  # Arrive
-        ws["D" + str(row)].value = arep if arep > 0 else 0
-        ws["E" + str(row)].value = str(matrix[i][4])  # Depart
-        ws["F" + str(row)].value = drep if drep > 0 else 0
-
-    dictionary, names = summarize(matrix)
-
-    summary = []
-    for name, (lates, nlates, earlies, nealries) in dictionary.items():
-        summary.append((name, lates, nlates, earlies, nealries))
-
-    ws = wb.get_sheet_by_name("Összesített")
-    ws.append("Név,Késés,Darab,Korai_indulás,Darab".split(","))
-    for row in summary:
-        ws.append(row)
     wb.save(outpath)
-
-
-def main():
-    if GUI:
-        path = tk_get_path()
-    else:
-        path = "input" + "." + INFLTYPE
-
-    parser = parse_csv if INFLTYPE == "csv" else parse_xl
-    matrix, header = parser(path)
-    if OUTFLTYPE == "csv":
-        dump_to_csv(matrix, header, outroot="E:/tmp/")
-    else:
-        dump_to_xl(matrix, header, outpath="E:/tmp/output.xlsx")
-
-
-if __name__ == '__main__':
-    main()
