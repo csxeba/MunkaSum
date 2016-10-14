@@ -15,10 +15,12 @@ def tk_get_path():
     return inpath
 
 
-OUTPATH = "E:/tmp/output.xlsx"
 path = tk_get_path()
+outpath = "\\".join(path.split("\\")[:-1]) + "\\"
+outpath += datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
 matrix, header = parse_xl(path)
 
-dump_to_xl(matrix, header, outpath=OUTPATH)
-print("Dumped output file to", OUTPATH)
-os.startfile(OUTPATH)
+dump_to_xl(matrix, header, outpath=outpath)
+print("Dumped output file to", outpath)
+os.startfile(outpath)
