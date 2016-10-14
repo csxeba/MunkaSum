@@ -16,8 +16,10 @@ def tk_get_path():
 
 
 path = tk_get_path()
-outpath = "\\".join(path.split("\\")[:-1]) + "\\"
-outpath += datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+outpath = "/".join(path.split("/")[:-1]) + "/"
+outpath += "Feldolgozott_"
+outpath += datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+outpath += ".xlsx"
 
 matrix, header = parse_xl(path)
 
