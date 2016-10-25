@@ -2,14 +2,27 @@ import datetime
 import warnings
 
 import openpyxl as xl
-from .time import Time
+from .time import Time, WorkingSaturday
 
-exceptions = {"Bogdánné Major Andrea": [-30, -30, -30, -30, -30],
-              "Simon Ildikó": [-30, -30, -30, -30, -30],
-              "Gherghely Ildikó": [0, 0, 0, 90, 0]}
+exceptions = {
+    "Bogdánné Major Andrea": (
+        [-30, -30, -30, -30, -30],
+        [-30, -30, -30, -30, -30]),
+    "Simon Ildikó": (
+        [-30, -30, -30, -30, -30],
+        [-30, -30, -30, -30, -30]),
+    "Gherghely Ildikó": (
+        [45, 45, 45, 45, 45],
+        [-15, 60, -15, 60, 135])
+}
 
 ideal_header = ["Név", "Dátum", "Érkezés", "", "Távozás", "",
                 "Napi rögzítési eltérés", "Rögzítette (TASZ, dátum)"]
+
+
+working_saturdays = {
+    "2016.10.25": 4,
+}
 
 
 def parse_csv(path: str):
@@ -99,14 +112,23 @@ def extract_matrix(lines):
 
 def summarize(matrix):
     names = sorted(list(set([line[0] for line in matrix])))
-    dictionary = {name: [0, 0, 0, 0] for name in names}
+    # m_over, m_late, m_nover, m_nlate, e_over, e_late, e_nover, e_nlate
+    dictionary = {name: [0, 0, 0, 0, 0, 0, 0, 0] for name in names}
     for line in matrix:
-        if line[3].epochs > 0 and line[3] != "n.a.":
-            dictionary[line[0]][0] += line[3].epochs
-            dictionary[line[0]][1] += 1
-        if line[5].epochs > 0 and line[5] != "n.a.":
-            dictionary[line[0]][2] += line[5].epochs
-            dictionary[line[0]][3] += 1
+        if line[3] != "n.a.":
+            if line[3].epochs < 0:  # MORNING OVERWORK
+                dictionary[line[0]][0] += line[3].epochs
+                dictionary[line[0]][2] += 1
+            else:  # MORNING UNDERWORK
+                dictionary[line[0]][1] += line[3].epochs
+                dictionary[line[0]][3] += 1
+        if line[5] != "n.a.":  # EVENING OVERWORK
+            if line[5].epochs < 0:
+                dictionary[line[0]][4] += line[5].epochs
+                dictionary[line[0]][6] += 1
+            else:  # EVENING UNDERWORK
+                dictionary[line[0]][5] += line[5].epochs
+                dictionary[line[0]][7] += 1
     return dictionary, names
 
 
@@ -115,7 +137,10 @@ def todate(x):
         nums = [int(d) for d in x.split(".")]
     else:
         nums = [x.year, x.month, x.day]
-    return datetime.date(year=nums[0], month=nums[1], day=nums[2])
+    if x in working_saturdays:
+        return WorkingSaturday(year=nums[0], month=nums[1], day=nums[2], schedule=working_saturdays[x])
+    else:
+        return datetime.date(year=nums[0], month=nums[1], day=nums[2])
 
 
 def totime(x):
@@ -130,8 +155,8 @@ def totime(x):
 
 def assert_line(line):
 
-    def calc_patience(nm):
-        pt = exceptions[nm][date.weekday()] if nm in exceptions else 0
+    def calc_patience(nm, evening):
+        pt = exceptions[nm][int(evening)][date.weekday()] if nm in exceptions else 0
         if pt < 0:
             return Time.from_epochs(abs(pt), sign=-1)
         else:
@@ -140,15 +165,16 @@ def assert_line(line):
     name, date, arrive, depart = line
     if arrive == "n.a." or depart == "n.a.":
         return ["n.a.", "n.a."]
-    patience = calc_patience(name)
-    result = [arrive - (Time(hours=7, minutes=30) + patience)]
+    morning_patience = calc_patience(name, evening=False)
+    evening_patience = calc_patience(name, evening=True)
+    result = [arrive - (Time(hours=7, minutes=30) + morning_patience)]
 
     if date.weekday() == 4:
-        referece = Time(hours=13, minutes=30) - patience
+        reference = Time(hours=13, minutes=30) - evening_patience
     else:
-        referece = Time(hours=16, minutes=0) - patience
+        reference = Time(hours=16, minutes=0) - evening_patience
 
-    result.append(referece - depart)
+    result.append(reference - depart)
     return result
 
 
@@ -168,7 +194,8 @@ def dump_to_csv(matrix, headers, outroot):
     def build_summary_data_string():
         dictionary, names = summarize(matrix)
 
-        outchain = "Név\tKésés\tDarab\tKorai_indulás\tDarab\n"
+        outchain = "Név\tReggel_túlóra\tKésés\ttúlóra_darab\tkésés_darab\t"
+        outchain += "Esti_túlóra\tKorai_indulás\ttúlóra_darab\tkésés_darab\n"
         for name in names:
             outchain += name + "\t" + "\t".join([str(element) for element in dictionary[name]]) + "\n"
         return outchain, "osszesitett.csv"
@@ -200,14 +227,19 @@ def dump_to_xl(matrix, headers, outpath):
             ws["F" + str(row)].value = drep if drep > 0 else ""
 
     def build_summary_worksheet():
+        # dict: m_over, m_late, m_nover, m_nlate, e_over, e_late, e_nover, e_nlate
         dictionary, names = summarize(matrix)
 
         summary = []
-        for name, (lates, nlates, earlies, nealries) in dictionary.items():
-            summary.append((name, lates, nlates, earlies, nealries))
+        names = sorted(list(dictionary.keys()))
+        for name in names:
+            data = dictionary[name]
+            summary.append([name] + data + [data[0] + data[1] + data[4] + data[5]])
 
         ws = wb.get_sheet_by_name("Összesített")
-        ws.append("Név,Késés,Darab,Korai_indulás,Darab".split(","))
+        header = "név, reggeli_túlóra, késés, túlóra_darab, késés_darab, "
+        header += "esti_túlóra, korai_indulás, túlóra_darab, ki_darab, perc_összes"
+        ws.append(header.split(", "))
         for row in summary:
             ws.append(row)
 

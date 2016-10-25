@@ -84,3 +84,15 @@ class Time:
 
     def __str__(self):
         return self.__repr__()
+
+
+class WorkingSaturday:
+    def __init__(self, year, month, day, schedule=4):
+        self.year = year
+        self.month = month
+        self.day = day
+        self.schedule = schedule
+
+    def weekday(self):
+        return self.schedule
+
